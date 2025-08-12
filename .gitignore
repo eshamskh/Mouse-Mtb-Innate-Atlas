@@ -1,0 +1,8 @@
+*plots/
+*per_comparison/
+*Git Ignore Files/
+# -- Include --
+!*GSEA_plots/
+!*merged_DEG_results/
+!*merged_GSEA_reduced_results/
+!*merged_GSEA_results/
