@@ -324,14 +324,10 @@ server <- function(input, output, session) {
     
     nms <- names(dat)
     # Column detection tuned to your schemas
-    pval_col   <- if (input$analysis_type=="DEG") detect_col(nms, c("p_val_adj"))
-    else detect_col(nms, c("padj"))
-    # (we still support alternates if you add them later)
+    pval_col   <- if (input$analysis_type=="DEG") detect_col(nms, c("p_val_adj")) else detect_col(nms, c("padj"))
     if (is.na(pval_col)) pval_col <- detect_col(nms, c("p.adjust","qval","pval","p_value"))
-    effect_col <- if (input$analysis_type=="DEG") detect_col(nms, c("avg_log2FC","log2FC","logFC"))
-    else detect_col(nms, c("NES","enrichmentScore","ES"))
-    main_col   <- if (input$analysis_type=="DEG") detect_col(nms, c("gene","Gene","symbol"))
-    else detect_col(nms, c("pathway","term","Description","gs_name","ID"))
+    effect_col <- if (input$analysis_type=="DEG") detect_col(nms, c("avg_log2FC","log2FC","logFC")) else detect_col(nms, c("NES","enrichmentScore","ES"))
+    main_col   <- if (input$analysis_type=="DEG") detect_col(nms, c("gene","Gene","symbol")) else detect_col(nms, c("pathway","term","Description","gs_name","ID"))
     parent_col <- detect_col(nms, c("parentTerm","parent","parent_term"))
     celltype_col <- detect_col(nms, c("celltype","CellType","cell_type"))
     gsea_label_col <- if (input$analysis_type=="DEG") NA_character_ else pick_gsea_label_col(nms)
@@ -400,11 +396,11 @@ server <- function(input, output, session) {
     ggplot(dat, aes(x=.data[[effect_col]], y=`..label`)) +
       geom_point(aes(size=-log10(.data[[pval_col]]), color=.data[[effect_col]])) +
       scale_color_gradient2(low="blue", mid="white", high="red", midpoint=0) +
-      scale_size_continuous(range=c(2,10)) +
+      scale_size_continuous(range=c(2,10), name="-log10(adj p)") +   # size legend label
       theme_minimal(base_size=input$font_size) +
       labs(title=unique(na.omit(dat$comparison)),
            x=x_lab, y="Term",
-           color=effect_col, size="-log10(adj p)") +
+           color=effect_col) +
       theme(plot.title=element_text(hjust=0))
   }
   
@@ -428,8 +424,11 @@ server <- function(input, output, session) {
                       geom_vline(xintercept=c(-input$effect_thresh,input$effect_thresh), linetype="dashed") +
                       labs(title="Volcano Plot", x=xcol, y="-log10(adj p)") +
                       theme_minimal(base_size=input$font_size)
-                    if (!is.na(celltype_col)) base + geom_point(aes(color=.data[[celltype_col]]), alpha=0.6)
-                    else base + geom_point(alpha=0.6)
+                    if (!is.na(celltype_col)) {
+                      base + geom_point(aes(color=.data[[celltype_col]]), alpha=0.6) + labs(color="Cell Type")
+                    } else {
+                      base + geom_point(alpha=0.6)
+                    }
                   } else {
                     ggplot(dat, aes(x=.data[[effect_col]], y=-log10(.data[[pval_col]]), text=`..label`)) +
                       geom_point(aes(color=.data[[effect_col]]), alpha=0.7) +
@@ -448,6 +447,7 @@ server <- function(input, output, session) {
                   ggplot(dat, aes(x=.data[[x_var]], y=if (input$analysis_type=="DEG") .data[[main_col]] else `..label`)) +
                     geom_point(aes(size=-log10(.data[[pval_col]]), color=.data[[effect_col]])) +
                     scale_color_gradient2(low="blue",mid="white",high="red",midpoint=0) +
+                    scale_size_continuous(range=c(2,10), name="-log10(adj p)") +  # size legend label
                     labs(x=str_to_title(x_var), y=if(input$analysis_type=="DEG") "Gene" else "Term") +
                     theme_minimal(base_size=input$font_size) +
                     theme(axis.text.x=element_text(angle=45,hjust=1))
@@ -473,7 +473,11 @@ server <- function(input, output, session) {
     )
     
     last_ggplot(p)
-    ggplotly(p, tooltip=c(if(input$analysis_type=="DEG") " ..label" else "..label", effect_col, pval_col, group_axis))
+    # Use the text aesthetic (mapped to ..label) so genes/terms always show
+    tips <- c("text", effect_col, pval_col)
+    if (!is.na(group_axis)) tips <- c(tips, group_axis)
+    if (!is.na(celltype_col)) tips <- c(tips, celltype_col)
+    ggplotly(p, tooltip = tips)
   })
   
   output$download_plot <- downloadHandler(
