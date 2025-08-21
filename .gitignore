@@ -1,6 +1,7 @@
 *plots/
 *per_comparison/
 *Git Ignore Files/
+*app1.R
 # -- Include --
 !*GSEA_plots/
 !*merged_DEG_results/

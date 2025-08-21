@@ -18,6 +18,71 @@ library(stringr)
 
 ui <- fluidPage(
   titlePanel("Mouse Mtb Innate Atlas DEG and GO:BP GSEA Viewer"),
+  # --- Collapsible Acknowledgements / References (open by default) ---
+  tags$head(tags$style(HTML("
+  .ack { background:#f7f9fc; border:1px solid #e3e7ef; border-radius:8px; padding:10px 14px; margin-bottom:14px; }
+  .ack > summary { font-weight:600; cursor:pointer; list-style:none; }
+  .ack > summary::-webkit-details-marker { display:none; }
+"))),
+  tags$details(open = "open", class = "ack",
+               tags$summary("Acknowledgements & References"),
+               HTML(
+                 "Made in collaboration between the Gerner (University of Washington, Department of Immunology) ",
+                 "and Urdahl (Seattle Childrens' Research Institute, CGIDR) Laboratories.<br><br>",
+                 "For use in submissions and publications, as well as further information regarding methods and analysis, please reference:<br>",
+                 "<em>\"Monocytic Niches Enable Mycobacterium tuberculosis Persistence in Lymph Nodes\"</em><br>",
+                 "(Manuscript in Progress)<br>",
+                 "Elya A. Shamskhou, Fergal R. Duffy, Lauren M. Cross, Vitaly V. Ganusov, ",
+                 "Courtney R. Plumlee, Benjamin H. Gern, Alan H. Dierks, Sara B. Cohen, ",
+                 "Kevin B. Urdahl*, Michael Y. Gerner*"
+               )),
+  # --- Tab styling (lavender background + bold active tab) ---
+  # --- Tab + Acknowledgements styling ---
+  tags$head(
+    tags$style(HTML("
+    /* --- Tab headers --- */
+    .nav-tabs > li > a {
+      background-color: #f3e8ff;  /* light lavender */
+      color: #333;
+      border-radius: 6px 6px 0 0;
+      margin-right: 4px;
+    }
+    .nav-tabs > li.active > a,
+    .nav-tabs > li.active > a:focus,
+    .nav-tabs > li.active > a:hover {
+      background-color: #e9d5ff; /* darker lavender when active */
+      color: #000;
+      font-weight: bold;
+    }
+    .nav-tabs > li > a:hover {
+      background-color: #ede9fe;
+    }
+
+    /* --- Acknowledgements block --- */
+    details.ack {
+      background-color: #f3e8ff;   /* light lavender closed */
+      border: 1px solid #e3e7ef;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      transition: background-color 0.2s ease;
+    }
+    details.ack[open] {
+      background-color: #e9d5ff;   /* darker lavender when expanded */
+    }
+    details.ack summary {
+      font-weight: 600;
+      cursor: pointer;
+      list-style: none;
+    }
+    details.ack summary::-webkit-details-marker {
+      display: none; /* hide default triangle marker */
+    }
+    details.ack:hover {
+      background-color: #ede9fe;   /* hover shade */
+    }
+  "))
+  ),
   sidebarLayout(
     sidebarPanel(
       selectInput("analysis_type", "Select Analysis Type:",
@@ -28,6 +93,8 @@ ui <- fluidPage(
       
       selectInput("group1", "Filter by Group 1:", choices = c("All")),
       selectInput("group2", "Filter by Group 2:", choices = c("All")),
+      uiOutput("axis_badge"),  # <— NEW: shows which axis (time/tissue/infection) is active
+      
       selectInput("celltype",     "Select Cell Type:", choices = NULL, multiple=TRUE),
       
       selectInput("plot_type",    "Select Plot Type:",
@@ -60,6 +127,7 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   last_ggplot <- reactiveVal(NULL)
+  plotting <- reactiveVal(FALSE)
   
   base_folders <- list(
     DEG          = "merged_DEG_results",
@@ -120,36 +188,105 @@ server <- function(input, output, session) {
                       selected = "All")
   })
   
-  output$plotInProgress <- reactive(TRUE)
-  outputOptions(output, "plotInProgress", suspendWhenHidden=FALSE)
+  output$plotInProgress <- reactive({ plotting() })
+  outputOptions(output, "plotInProgress", suspendWhenHidden = FALSE)
   
-  # --- comparison helpers (classification + info + auto-set filter-to-All) ---
-  classify_comparison <- function(x) {
-    x <- tolower(x %||% "")
-    if (grepl("^(\\d+_\\d+)$", x)) return("time")
-    if (grepl("^(blood|lung|mln)_(blood|lung|mln)$", x) ||
-        grepl("(blood|lung|mln)_", x) || grepl("_(blood|lung|mln)$", x)) return("tissue")
-    if (grepl("mtb", x) || grepl("mtb-.*mtb\\+", x) || grepl("neg.*pos|pos.*neg", x)) return("infection")
-    if (grepl("gobp_time", x)) return("time")
-    if (grepl("gobp_tissue", x)) return("tissue")
-    if (grepl("gobp_mtb", x)) return("infection")
+  # --- helpers to detect token types from group1/group2 values ---
+  .is_numeric_level <- function(x) { all(grepl("^\\s*-?\\d+\\s*$", x)) }
+  .normalize_infection <- function(x) {
+    x <- tolower(trimws(x))
+    x <- gsub("mtb\\+", "pos", x)
+    x <- gsub("mtb-",  "neg", x)
+    x
+  }
+  .is_infection_levels <- function(x) {
+    y <- .normalize_infection(x)
+    any(y %in% c("pos","neg","infected","uninfected","positive","negative","control"))
+  }
+  .is_tissue_levels <- function(x) {
+    any(tolower(trimws(x)) %in% c("blood","lung","mln"))
+  }
+  
+  # Dynamic sizing helpers
+  compute_plot_height <- function(n_rows, base = 380, per = 22, max_h = 2400) {
+    # total height = base + per * rows, but capped so it doesn't get absurdly tall
+    min(max_h, base + per * n_rows)
+  }
+  size_range_for <- function(n_rows) {
+    # tighter sizes when there are many rows
+    if (n_rows >= 60) return(c(1.5, 5))
+    if (n_rows >= 40) return(c(1.8, 6))
+    if (n_rows >= 25) return(c(2, 8))
+    c(2, 10)
+  }
+  
+  # --- robust classifier: use comparison_family > group1/2 tokens > filename > soft fallback ---
+  classify_comparison <- function(comp_name, dat = NULL) {
+    s <- tolower(comp_name %||% "")
+    
+    # 1) explicit comparison_family wins
+    if (!is.null(dat) && "comparison_family" %in% names(dat)) {
+      fam <- unique(na.omit(tolower(as.character(dat$comparison_family))))
+      fam <- gsub("^mtb$", "infection", fam)
+      fam <- fam[fam %in% c("time","tissue","infection")]
+      if (length(fam) == 1) return(fam)
+    }
+    
+    # 2) infer from group1/group2 token types (most reliable for DEG)
+    if (!is.null(dat) && any(c("group1","group2") %in% names(dat))) {
+      gvals <- unique(na.omit(as.character(c(dat$group1, dat$group2))))
+      if (length(gvals)) {
+        if (.is_tissue_levels(gvals)) return("tissue")
+        if (.is_infection_levels(gvals)) return("infection")
+        if (.is_numeric_level(gvals)) return("time")
+        # mixed tokens—try to see which bucket dominates
+        tis_hit <- mean(tolower(trimws(gvals)) %in% c("blood","lung","mln"))
+        inf_hit <- mean(.normalize_infection(gvals) %in% c("pos","neg","infected","uninfected","positive","negative","control"))
+        num_hit <- mean(grepl("^\\s*-?\\d+\\s*$", gvals))
+        if (max(tis_hit, inf_hit, num_hit) > 0) {
+          return(c("tissue","infection","time")[which.max(c(tis_hit, inf_hit, num_hit))])
+        }
+      }
+    }
+    
+    # 3) filename-based hints
+    if (grepl("^\\d+([_-]|vs)\\d+$", s) || grepl("^(\\d+[_-]\\d+)$", s)) return("time")
+    if (grepl("^(blood|lung|mln)[^a-z0-9]+(blood|lung|mln)$", s)) return("tissue")
+    if (grepl("gobp_time", s)) return("time")
+    if (grepl("gobp_tissue", s)) return("tissue")
+    if (grepl("gobp_mtb", s) || grepl("mtb", s) || grepl("neg|pos", s)) return("infection")
+    
+    # 4) soft fallback (last resort; much less aggressive than before)
+    if (!is.null(dat)) {
+      get_vals <- function(col) if (col %in% names(dat)) unique(na.omit(as.character(dat[[col]]))) else character()
+      # Prefer variation in group columns over whole-table columns
+      gvals <- unique(na.omit(as.character(c(dat$group1, dat$group2))))
+      if (.is_tissue_levels(gvals)) return("tissue")
+      if (.is_infection_levels(gvals)) return("infection")
+      if (.is_numeric_level(gvals)) return("time")
+    }
     "unknown"
   }
+  
   
   comparison_help <- function(type) {
     switch(type,
            "time" = HTML(
-             "<b>Time comparison:</b> contrasts samples from two days (e.g., 0 vs 15). ",
-             "Tip: set <i>Filter by Day</i> to <b>All</b> so both timepoints are included."
+             "<b>Time comparison: </b> Possible group comparisons are <b>15 v 0, 15 v 28, 28 v 0</b>. ",
+             "Set <i>Filter by Day</i> to <b>All</b> since you are comparing timepoints.",
+             "Tip: The first group is UP, while the second group DOWN"
            ),
            "tissue" = HTML(
-             "<b>Tissue comparison:</b> contrasts tissues (e.g., blood vs lung). ",
-             "Tip: set <i>Filter by Tissue</i> to <b>All</b> so both tissues are included."
+             "<b>Tissue comparison:</b> for tissues affected by aerosol Mtb infection- <i>lung, mln (mediastinal lymph node), and blood</i>",
+             "Possible group comparisons are <b>lung vs mln, blood v mln, blood v lung <'b>. ",
+             "Set <i>Filter by Tissue</i> to <b>All</b> since you are comparing tissues",
+             "Tip: The first group is UP, while the second group DOWN"
            ),
            "infection" = HTML(
              "<b>mtb (infection) comparison:</b> contrasts Mtb-infected (<b>pos</b>) vs uninfected (<b>neg</b>). ",
-             "Valid for <b>lung</b> and <b>mln</b> tissues. ",
-             "Tip: set <i>Filter by Infection Status</i> to <b>All</b> so both groups are included."
+             "Valid for <b>lung</b> and <b>mln</b> tissues only. ",
+             "Set <i>Filter by Infection Status</i> to <b>All</b> since you are comparing pos vs neg",
+             "Tip: The first group is UP, while the second group DOWN"
            ),
            HTML(
              "<b>Mixed/unknown comparison:</b> If this contrasts groups on a specific axis ",
@@ -158,56 +295,25 @@ server <- function(input, output, session) {
     )
   }
   
-  output$comparison_info <- renderUI({
-    req(input$comparison)
-    typ <- classify_comparison(input$comparison)
-    div(
-      style = "padding:8px; margin-bottom:6px; border-left:4px solid #3498db; background:#f5f9ff;",
-      comparison_help(typ)
-    )
-  })
-  
-  observeEvent(input$comparison, {
-    req(input$comparison)
-    typ <- classify_comparison(input$comparison)
-    if (typ == "time") {
-      updateSelectInput(session, "day", selected = "All")
-      showNotification("Time comparison selected — including both timepoints (Filter by Day → All).", type="message", duration=4)
-    } else if (typ == "tissue") {
-      updateSelectInput(session, "tissue", selected = "All")
-      showNotification("Tissue comparison selected — including both tissues (Filter by Tissue → All).", type="message", duration=4)
-    } else if (typ == "infection") {
-      updateSelectInput(session, "condition", selected = "All")
-      showNotification("Infection comparison selected — including pos & neg (Filter by Infection Status → All).", type="message", duration=4)
+  # More forgiving parser (supports 0_15, 0-15, 0vs15, blood-lung...)
+  parse_groups_from_comparison <- function(comp, typ) {
+    s <- tolower(comp %||% "")
+    toks <- unlist(strsplit(s, "[^a-z0-9]+"))
+    toks <- toks[nzchar(toks)]
+    if (typ == "time" || grepl("gobp_time", s)) {
+      dg <- toks[grepl("^-?\\d+$", toks)]
+      if (length(dg) == 0) dg <- c("0","15","28")
+      unique(dg)
+    } else if (typ == "tissue" || grepl("gobp_tissue", s)) {
+      valid <- c("blood","lung","mln")
+      tt <- toks[toks %in% valid]
+      if (length(tt) == 0) tt <- valid
+      unique(tt)
+    } else if (typ == "infection" || grepl("gobp_mtb", s)) {
+      c("pos","neg")
+    } else {
+      character()
     }
-  }, ignoreInit = FALSE)
-  
-  observeEvent(list(input$comparison, input$tissue, input$condition, input$day), {
-    req(input$comparison)
-    typ <- classify_comparison(input$comparison)
-    if (typ == "time" && !identical(input$day, "All")) {
-      showNotification("Reminder: for a time comparison, 'Filter by Day' should be 'All'.", type = "warning", duration = 5)
-    }
-    if (typ == "tissue" && !identical(input$tissue, "All")) {
-      showNotification("Reminder: for a tissue comparison, 'Filter by Tissue' should be 'All'.", type = "warning", duration = 5)
-    }
-    if (typ == "infection") {
-      if (!identical(input$condition, "All")) {
-        showNotification("Reminder: for an infection comparison, 'Filter by Infection Status' should be 'All'.", type = "warning", duration = 5)
-      }
-      if (identical(input$tissue, "blood")) {
-        showNotification("Note: mtb comparisons are only valid for lung and mln tissues.", type = "warning", duration = 6)
-      }
-    }
-  }, ignoreInit = FALSE)
-  
-  # --- column detection helpers ---
-  detect_col <- function(nms, candidates) {
-    cand <- candidates[candidates %in% nms]
-    if (length(cand)) cand[1] else NA_character_
-  }
-  pick_gsea_label_col <- function(nms) {
-    detect_col(nms, c("parentTerm","term","Description","pathway","gs_name","ID","Name","name","title"))
   }
   
   # Canonicalizers for group1/group2 levels
@@ -232,26 +338,6 @@ server <- function(input, output, session) {
     v <- gsub("\\s+", "", v)
     v <- v[grepl("^-?\\d+$", v)]
     sort(unique(v), na.last = NA)
-  }
-  
-  parse_groups_from_comparison <- function(comp, typ) {
-    comp <- tolower(comp %||% "")
-    if (typ == "time" || grepl("gobp_time", comp)) {
-      toks <- unlist(strsplit(comp, "_"))
-      toks <- toks[grepl("^-?\\d+$", toks)]
-      if (length(toks) == 0) toks <- c("0","15","28")
-      unique(toks)
-    } else if (typ == "tissue" || grepl("gobp_tissue", comp)) {
-      valid <- c("blood","lung","mln")
-      toks <- unlist(strsplit(comp, "_"))
-      toks <- toks[toks %in% valid]
-      if (length(toks) == 0) toks <- valid
-      unique(toks)
-    } else if (typ == "infection" || grepl("gobp_mtb", comp)) {
-      c("pos","neg")
-    } else {
-      character()
-    }
   }
   
   get_raw_data <- reactive({
@@ -285,19 +371,78 @@ server <- function(input, output, session) {
     character()
   }
   
-  observeEvent(list(input$comparison, input$analysis_type), {
+  # --- Axis badge (small pill under Group 1/2) ---
+  render_axis_badge <- function(typ) {
+    col <- switch(typ, time="#6ab04c", tissue="#0984e3", infection="#e17055", "#b2bec3")
+    lbl <- switch(typ, time="time", tissue="tissue", infection="infection", "unknown")
+    div(
+      style = sprintf("margin:-6px 0 8px 0;"),
+      span(
+        lbl,
+        style = sprintf(
+          "display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;
+           color:white;background:%s;letter-spacing:.5px;", col
+        )
+      )
+    )
+  }
+  output$axis_badge <- renderUI({
     req(input$comparison)
-    typ <- classify_comparison(input$comparison)
-    dat <- get_raw_data()
-    valid <- valid_groups_from_dat(dat, typ, input$comparison)
-    if (length(valid) == 0) {
-      updateSelectInput(session, "group1", choices = c("All"), selected = "All")
-      updateSelectInput(session, "group2", choices = c("All"), selected = "All")
-    } else {
-      updateSelectInput(session, "group1", choices = c("All", valid), selected = "All")
-      updateSelectInput(session, "group2", choices = c("All", valid), selected = "All")
+    typ <- classify_comparison(input$comparison, tryCatch(get_raw_data(), error = function(...) NULL))
+    render_axis_badge(typ)
+  })
+  
+  output$comparison_info <- renderUI({
+    req(input$comparison)
+    typ <- classify_comparison(input$comparison, tryCatch(get_raw_data(), error = function(...) NULL))
+    div(
+      style = "padding:8px; margin-bottom:6px; border-left:4px solid #3498db; background:#f5f9ff;",
+      comparison_help(typ)
+    )
+  })
+  
+  observeEvent(input$comparison, {
+    req(input$comparison)
+    typ <- classify_comparison(input$comparison, tryCatch(get_raw_data(), error = function(...) NULL))
+    if (typ == "time") {
+      updateSelectInput(session, "day", selected = "All")
+      showNotification("Time comparison selected — including both timepoints (Filter by Day → All).", type="message", duration=4)
+    } else if (typ == "tissue") {
+      updateSelectInput(session, "tissue", selected = "All")
+      showNotification("Tissue comparison selected — including both tissues (Filter by Tissue → All).", type="message", duration=4)
+    } else if (typ == "infection") {
+      updateSelectInput(session, "condition", selected = "All")
+      showNotification("Infection comparison selected — including pos & neg (Filter by Infection Status → All).", type="message", duration=4)
     }
   }, ignoreInit = FALSE)
+  
+  observeEvent(list(input$comparison, input$tissue, input$condition, input$day), {
+    req(input$comparison)
+    typ <- classify_comparison(input$comparison, tryCatch(get_raw_data(), error = function(...) NULL))
+    if (typ == "time" && !identical(input$day, "All")) {
+      showNotification("Reminder: for a time comparison, 'Filter by Day' should be 'All'.", type = "warning", duration = 5)
+    }
+    if (typ == "tissue" && !identical(input$tissue, "All")) {
+      showNotification("Reminder: for a tissue comparison, 'Filter by Tissue' should be 'All'.", type = "warning", duration = 5)
+    }
+    if (typ == "infection") {
+      if (!identical(input$condition, "All")) {
+        showNotification("Reminder: for an infection comparison, 'Filter by Infection Status' should be 'All'.", type = "warning", duration = 5)
+      }
+      if (identical(input$tissue, "blood")) {
+        showNotification("Note: mtb comparisons are only valid for lung and mln tissues.", type = "warning", duration = 6)
+      }
+    }
+  }, ignoreInit = FALSE)
+  
+  # --- column detection helpers ---
+  detect_col <- function(nms, candidates) {
+    cand <- candidates[candidates %in% nms]
+    if (length(cand)) cand[1] else NA_character_
+  }
+  pick_gsea_label_col <- function(nms) {
+    detect_col(nms, c("parentTerm","term","Description","pathway","gs_name","ID","Name","name","title"))
+  }
   
   # choose best available grouping column for dot/bar (x-axis)
   pick_group_axis <- function(nms) {
@@ -385,18 +530,60 @@ server <- function(input, output, session) {
     dat
   })
   
-  output$data_table <- renderDT({
-    datatable(get_data(), options=list(pageLength=10), filter='top')
-  })
+  # Use smarter classifier anywhere comparison "type" matters
+  observeEvent(list(input$comparison, input$analysis_type), {
+    req(input$comparison)
+    dat <- get_raw_data()
+    typ <- classify_comparison(input$comparison, dat)
+    valid <- unique(valid_groups_from_dat(dat, typ, input$comparison))
+    if (length(valid) == 0) {
+      updateSelectInput(session, "group1", choices = c("All"), selected = "All")
+      updateSelectInput(session, "group2", choices = c("All"), selected = "All")
+    } else {
+      updateSelectInput(session, "group1", choices = c("All", valid), selected = "All")
+      updateSelectInput(session, "group2", choices = c("All", valid), selected = "All")
+    }
+  }, ignoreInit = FALSE)
   
-  make_bubble <- function(dat, cols){
+  output$data_table <- renderDT({
+    dat <- get_data()
+    
+    # 1) Drop internal label columns used only for plotting hovers
+    drop_candidates <- c("..label", "label")
+    drop_candidates <- drop_candidates[drop_candidates %in% names(dat)]
+    if (length(drop_candidates)) {
+      dat <- dat[, setdiff(names(dat), drop_candidates), drop = FALSE]
+    }
+    
+    # 2) For GSEA / GSEA_reduced, move leading-edge style columns to the far right
+    if (input$analysis_type %in% c("GSEA", "GSEA_reduced")) {
+      le_candidates <- c(
+        "leadingEdge", "leading_edge", "leading.edge",
+        "core_enrichment", "coreEnrichment", "leadingGenes", "leading_genes"
+      )
+      le_present <- le_candidates[le_candidates %in% names(dat)]
+      if (length(le_present)) {
+        ord <- c(setdiff(names(dat), le_present), le_present)
+        dat <- dat[, ord, drop = FALSE]
+      }
+    }
+    
+    datatable(
+      dat,
+      options = list(pageLength = 10, scrollX = TRUE),
+      filter = "top"
+    )
+  })
+
+  
+  make_bubble <- function(dat, cols, size_range){
     pval_col   <- cols$pval
     effect_col <- cols$effect
     x_lab <- if (!is.na(effect_col) && effect_col == "NES") "Normalized Enrichment Score (NES)" else effect_col
     ggplot(dat, aes(x=.data[[effect_col]], y=`..label`)) +
       geom_point(aes(size=-log10(.data[[pval_col]]), color=.data[[effect_col]])) +
       scale_color_gradient2(low="blue", mid="white", high="red", midpoint=0) +
-      scale_size_continuous(range=c(2,10), name="-log10(adj p)") +   # size legend label
+      scale_size_continuous(range=size_range, name="-log10(adj p)") +
       theme_minimal(base_size=input$font_size) +
       labs(title=unique(na.omit(dat$comparison)),
            x=x_lab, y="Term",
@@ -405,14 +592,24 @@ server <- function(input, output, session) {
   }
   
   output$main_plot <- renderPlotly({
+    plotting(TRUE)                         # turn ON when rendering starts
+    on.exit(plotting(FALSE), add = TRUE)   # guarantee OFF when it finishes (success or error)
+    
     validate(need(!is.null(input$plot_type), "Choose a plot type."))
-    dat <- get_data(); req(nrow(dat)>0)
+    dat <- get_data(); req(nrow(dat) > 0)
     cols <- attr(dat, "cols"); req(!is.null(cols))
     pval_col     <- cols$pval
     effect_col   <- cols$effect
     main_col     <- cols$main
     celltype_col <- cols$celltype
     group_axis   <- cols$group_axis
+    # figure out the Y categories for dot/bubble plots
+    y_var <- if (input$analysis_type == "DEG") main_col else "..label"
+    y_levels <- if (input$plot_type %in% c("Dot Plot","Bubble Plot")) {
+      length(unique(na.omit(dat[[y_var]])))
+    } else 0
+    dyn_height <- if (y_levels > 0) compute_plot_height(y_levels) else 600
+    dot_sizes  <- size_range_for(y_levels)
     
     p <- switch(input$plot_type,
                 "Volcano Plot" = {
@@ -442,16 +639,16 @@ server <- function(input, output, session) {
                   }
                 },
                 "Dot Plot" = {
-                  # X axis: best available grouping (celltype->group1->group2->comparison_family->tissue/day/Mtb)
                   x_var <- group_axis %||% main_col
                   ggplot(dat, aes(x=.data[[x_var]], y=if (input$analysis_type=="DEG") .data[[main_col]] else `..label`)) +
                     geom_point(aes(size=-log10(.data[[pval_col]]), color=.data[[effect_col]])) +
                     scale_color_gradient2(low="blue",mid="white",high="red",midpoint=0) +
-                    scale_size_continuous(range=c(2,10), name="-log10(adj p)") +  # size legend label
+                    scale_size_continuous(range=dot_sizes, name="-log10(adj p)") +
                     labs(x=str_to_title(x_var), y=if(input$analysis_type=="DEG") "Gene" else "Term") +
                     theme_minimal(base_size=input$font_size) +
                     theme(axis.text.x=element_text(angle=45,hjust=1))
                 },
+                
                 "Bar Plot" = {
                   x_var <- if (input$analysis_type=="DEG") main_col else "..label"
                   grp   <- group_axis %||% x_var
@@ -468,16 +665,17 @@ server <- function(input, output, session) {
                 },
                 "Bubble Plot" = {
                   validate(need(input$analysis_type!="DEG","Bubble only for GSEA/GSEA_reduced"))
-                  make_bubble(dat, cols)
+                  make_bubble(dat, cols, size_range = dot_sizes)
                 }
     )
     
     last_ggplot(p)
-    # Use the text aesthetic (mapped to ..label) so genes/terms always show
     tips <- c("text", effect_col, pval_col)
     if (!is.na(group_axis)) tips <- c(tips, group_axis)
     if (!is.na(celltype_col)) tips <- c(tips, celltype_col)
-    ggplotly(p, tooltip = tips)
+    
+    ggplotly(p, tooltip = tips) %>%
+      layout(height = dyn_height, margin = list(t = 60, r = 20, b = 60, l = 100))
   })
   
   output$download_plot <- downloadHandler(
