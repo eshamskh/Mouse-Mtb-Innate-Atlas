@@ -30,8 +30,8 @@
 # Installation
 # -------------------------------------------------------------
 # Clone the repository:
-#   git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
-#   cd YOUR-REPO
+#   git clone https://github.com/eshamskh/Mouse-Mtb-Innate-Atlas.git
+#   cd Mouse-Mtb-Innate-Atlas.git
 #
 # Install required R packages:
 #   install.packages(c(
@@ -49,7 +49,8 @@
 #   shiny::runApp()
 #
 # Or deploy via Posit Connect Cloud:
-#   https://docs.posit.co/connect-cloud/how-to/r/shiny-r.html
+# https://eshamskh-mouse-mtb-innate-atlas.share.connect.posit.cloud
+
 
 # -------------------------------------------------------------
 # Data
