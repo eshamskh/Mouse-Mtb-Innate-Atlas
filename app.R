@@ -444,6 +444,10 @@ server <- function(input, output, session) {
   pick_gsea_label_col <- function(nms) {
     detect_col(nms, c("parentTerm","term","Description","pathway","gs_name","ID","Name","name","title"))
   }
+  pick_child_term_col <- function(nms) {
+    # A "child" term (more specific) to show in hover for GSEA_reduced
+    detect_col(nms, c("term","Description","title","Name","gs_name","pathway","ID"))
+  }
   
   # choose best available grouping column for dot/bar (x-axis)
   pick_group_axis <- function(nms) {
@@ -478,6 +482,10 @@ server <- function(input, output, session) {
     celltype_col <- detect_col(nms, c("celltype","CellType","cell_type"))
     gsea_label_col <- if (input$analysis_type=="DEG") NA_character_ else pick_gsea_label_col(nms)
     
+    to_num <- function(x) suppressWarnings(as.numeric(x))
+    if (!is.na(pval_col)   && pval_col   %in% names(dat)) dat[[pval_col]]   <- to_num(dat[[pval_col]])
+    if (!is.na(effect_col) && effect_col %in% names(dat)) dat[[effect_col]] <- to_num(dat[[effect_col]])
+    
     validate(
       need(!is.na(main_col), "Could not find a gene/pathway column."),
       need(!is.na(pval_col), "Could not find an adjusted p-value column."),
@@ -488,12 +496,38 @@ server <- function(input, output, session) {
     if (pval_col   %in% names(dat)) dat <- dat %>% filter(.data[[pval_col]]   <= input$pval_thresh)
     if (effect_col %in% names(dat)) dat <- dat %>% filter(abs(.data[[effect_col]]) >= input$effect_thresh)
     
-    # Flexible name filter
-    if (str_trim(input$gene_filter) != "") {
-      tokens <- str_split(input$gene_filter, ",")[[1]] %>% str_trim() %>% discard(~ .x == "")
-      rx <- paste0("(", paste(stringr::str_replace_all(tokens, "([\\W])", "\\\\\\1"), collapse="|"), ")")
-      dat <- dat %>% filter(str_detect(!!sym(main_col), regex(rx, ignore_case = TRUE)))
+    # Flexible name/pathway filter (robust; multi-column for GSEA)
+    gf <- trimws(input$gene_filter %||% "")
+    if (nzchar(gf)) {
+      tokens <- strsplit(gf, ",", fixed = TRUE)[[1]]
+      tokens <- trimws(tokens)
+      tokens <- tokens[nzchar(tokens)]
+      if (length(tokens)) {
+        esc <- function(s) stringr::str_replace_all(s, "([\\W])", "\\\\\\1")
+        rx  <- paste0("(", paste(vapply(tokens, esc, "", USE.NAMES = FALSE), collapse = "|"), ")")
+        
+        if (input$analysis_type == "DEG") {
+          # DEG: just search the gene/symbol column
+          dat <- dplyr::filter(dat, stringr::str_detect(.data[[main_col]], stringr::regex(rx, ignore_case = TRUE)))
+        } else {
+          # GSEA/GSEA_reduced: search across common term/label columns (only those that exist)
+          gsea_search_pool <- c(
+            main_col,                         # (ID/pathway column you detected)
+            gsea_label_col,                   # your chosen label column
+            "term","Description","parentTerm","pathway","gs_name","ID","Name","title"
+          )
+          search_cols <- unique(gsea_search_pool[gsea_search_pool %in% names(dat)])
+          if (length(search_cols)) {
+            dat <- dplyr::filter(
+              dat,
+              dplyr::if_any(dplyr::all_of(search_cols),
+                            ~ stringr::str_detect(as.character(.x), stringr::regex(rx, ignore_case = TRUE)))
+            )
+          }
+        }
+      }
     }
+    
     
     # Guaranteed label for hover/axes (DEG: gene; GSEA: parentTerm -> term -> Description -> pathway)
     if (input$analysis_type == "DEG") {
@@ -577,20 +611,21 @@ server <- function(input, output, session) {
   })
 
   
-  make_bubble <- function(dat, cols, size_range){
+  make_bubble <- function(dat, cols, size_range, y_label){
     pval_col   <- cols$pval
     effect_col <- cols$effect
     x_lab <- if (!is.na(effect_col) && effect_col == "NES") "Normalized Enrichment Score (NES)" else effect_col
-    ggplot(dat, aes(x=.data[[effect_col]], y=`..label`)) +
+    ggplot(dat, aes(x=.data[[effect_col]], y=`..label`, text=`..hover`)) +  # <-- add text
       geom_point(aes(size=-log10(.data[[pval_col]]), color=.data[[effect_col]])) +
       scale_color_gradient2(low="blue", mid="white", high="red", midpoint=0) +
       scale_size_continuous(range=size_range, name="-log10(adj p)") +
       theme_minimal(base_size=input$font_size) +
       labs(title=unique(na.omit(dat$comparison)),
-           x=x_lab, y="Term",
+           x=x_lab, y=y_label,                 # <-- use y_label
            color=effect_col) +
       theme(plot.title=element_text(hjust=0))
   }
+  
   
   output$main_plot <- renderPlotly({
     plotting(TRUE)                         # turn ON when rendering starts
@@ -611,7 +646,59 @@ server <- function(input, output, session) {
     } else 0
     dyn_height <- if (y_levels > 0) compute_plot_height(y_levels) else 600
     dot_sizes  <- size_range_for(y_levels)
+    # ---- Build hover text and y-axis label ----
+    # default y-axis label
+    ylab_txt <- if (input$analysis_type == "DEG") "Gene" else "Term"
     
+    if (input$analysis_type != "DEG") {
+      # choose columns
+      parent_col_in_use <- cols$parent
+      gsea_label_col    <- cols$gsea_label
+      child_col         <- pick_child_term_col(names(dat))
+      
+      # which parent to display if needed
+      parent_name <- if (!is.na(parent_col_in_use) && parent_col_in_use %in% names(dat)) {
+        parent_col_in_use
+      } else if (!is.null(gsea_label_col) && !is.na(gsea_label_col) && gsea_label_col %in% names(dat)) {
+        gsea_label_col
+      } else {
+        main_col
+      }
+      
+      term_name <- if (!is.na(child_col) && child_col %in% names(dat)) child_col else main_col
+      
+      # show cell type only if there are multiple cell types in the filtered data
+      has_multi_ct <- !is.na(celltype_col) &&
+        length(unique(na.omit(dat[[celltype_col]]))) > 1
+      
+      # y-axis label tweak for GSEA_reduced
+      if (input$analysis_type == "GSEA_reduced") {
+        ylab_txt <- "Parent Term"
+      }
+      
+      # build the hover text
+      if (input$analysis_type == "GSEA_reduced") {
+        # Parent on axis, show child term + celltype in hover
+        dat$`..hover` <- paste0(
+          "Parent: ", dat[[parent_name]], "<br>",
+          "Term: ",   dat[[term_name]],
+          if (has_multi_ct) paste0("<br>Cell type: ", dat[[celltype_col]]) else "",
+          "<br>", if (identical(effect_col, "NES")) "NES" else effect_col, ": ", signif(dat[[effect_col]], 3),
+          "<br>adj p: ", signif(dat[[pval_col]], 3)
+        )
+      } else {
+        # Full GSEA: include celltype when relevant
+        dat$`..hover` <- paste0(
+          "Term: ", dat[[term_name]],
+          if (has_multi_ct) paste0("<br>Cell type: ", dat[[celltype_col]]) else "",
+          "<br>", if (identical(effect_col, "NES")) "NES" else effect_col, ": ", signif(dat[[effect_col]], 3),
+          "<br>adj p: ", signif(dat[[pval_col]], 3)
+        )
+      }
+    } else {
+      # DEG: keep simple gene hover
+      dat$`..hover` <- dat[[main_col]]
+    }
     p <- switch(input$plot_type,
                 "Volcano Plot" = {
                   if (input$analysis_type=="DEG") {
@@ -641,15 +728,18 @@ server <- function(input, output, session) {
                 },
                 "Dot Plot" = {
                   x_var <- group_axis %||% main_col
-                  ggplot(dat, aes(x=.data[[x_var]], y=if (input$analysis_type=="DEG") .data[[main_col]] else `..label`)) +
+                  ggplot(dat, aes(
+                    x = .data[[x_var]],
+                    y = if (input$analysis_type=="DEG") .data[[main_col]] else `..label`,
+                    text = `..hover`                           # <-- add this
+                  )) +
                     geom_point(aes(size=-log10(.data[[pval_col]]), color=.data[[effect_col]])) +
                     scale_color_gradient2(low="blue",mid="white",high="red",midpoint=0) +
                     scale_size_continuous(range=dot_sizes, name="-log10(adj p)") +
-                    labs(x=str_to_title(x_var), y=if(input$analysis_type=="DEG") "Gene" else "Term") +
+                    labs(x=str_to_title(x_var), y=ylab_txt) +    # <-- use ylab_txt
                     theme_minimal(base_size=input$font_size) +
                     theme(axis.text.x=element_text(angle=45,hjust=1))
                 },
-                
                 "Bar Plot" = {
                   x_var <- if (input$analysis_type=="DEG") main_col else "..label"
                   grp   <- group_axis %||% x_var
@@ -666,7 +756,7 @@ server <- function(input, output, session) {
                 },
                 "Bubble Plot" = {
                   validate(need(input$analysis_type!="DEG","Bubble only for GSEA/GSEA_reduced"))
-                  make_bubble(dat, cols, size_range = dot_sizes)
+                  make_bubble(dat, cols, size_range = dot_sizes, y_label = ylab_txt)  # <-- pass y_label
                 }
     )
     
