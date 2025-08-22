@@ -272,25 +272,26 @@ server <- function(input, output, session) {
   comparison_help <- function(type) {
     switch(type,
            "time" = HTML(
-             "<b>Time comparison: </b> Possible group comparisons are <b>15 v 0, 15 v 28, 28 v 0</b>. ",
-             "Set <i>Filter by Day</i> to <b>All</b> since you are comparing timepoints.",
+             "<b>Time comparison: </b> Possible group comparisons are <b>15 v 0, 15 v 28, 28 v 0</b>.<br>",
+             "Set <i>Filter by Day</i> to <b>All</b> since you are comparing timepoints.<br>",
              "Tip: The first group is UP, while the second group DOWN"
            ),
            "tissue" = HTML(
-             "<b>Tissue comparison:</b> for tissues affected by aerosol Mtb infection- <i>lung, mln (mediastinal lymph node), and blood</i>",
-             "Possible group comparisons are <b>lung vs mln, blood v mln, blood v lung <'b>. ",
-             "Set <i>Filter by Tissue</i> to <b>All</b> since you are comparing tissues",
+             "<b>Tissue comparison:</b> for tissues affected by aerosol Mtb infection- <i>lung, mln (mediastinal lymph node), and blood</i><br>",
+             "Possible group comparisons are <b>lung vs mln, blood v mln, blood v lung</b>.<br>",
+             "Set <i>Filter by Tissue</i> to <b>All</b> since you are comparing tissues.<br>",
              "Tip: The first group is UP, while the second group DOWN"
            ),
            "infection" = HTML(
-             "<b>mtb (infection) comparison:</b> contrasts Mtb-infected (<b>pos</b>) vs uninfected (<b>neg</b>). ",
-             "Valid for <b>lung</b> and <b>mln</b> tissues only. ",
-             "Set <i>Filter by Infection Status</i> to <b>All</b> since you are comparing pos vs neg",
+             "<b>mtb (infection) comparison:</b> contrasts Mtb-infected (<b>pos</b>) vs uninfected (<b>neg</b>).<br>",
+             "Valid for <b>lung</b> and <b>mln</b> tissues only.<br>",
+             "Set <i>Filter by Infection Status</i> to <b>All</b> since you are comparing pos vs neg.<br>",
              "Tip: The first group is UP, while the second group DOWN"
            ),
            HTML(
-             "<b>Mixed/unknown comparison:</b> If this contrasts groups on a specific axis ",
-             "(time, tissue, or infection), set that axis's filter to <b>All</b>."
+             "<b>Mixed/unknown comparison:</b><br>",
+             "If this contrasts groups on a specific axis (time, tissue, or infection),<br>",
+             "set that axis's filter to <b>All</b>."
            )
     )
   }
