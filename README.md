@@ -79,6 +79,7 @@
 #            Vitaly V. Ganusov, Courtney R. Plumlee, Benjamin H. Gern,
 #            Alan H. Dierks, Sara B. Cohen, Kevin B. Urdahl*,
 #            Michael Y. Gerner*
+**Note:** Portions of this code and documentation were developed with assistance from ChatGPT (OpenAI).
 
 # -------------------------------------------------------------
 # License
