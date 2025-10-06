@@ -76,9 +76,9 @@
 #   "Monocytic Niches Enable Mycobacterium tuberculosis Persistence in Lymph Nodes"
 #   (Manuscript in Progress)
 #   Authors: Elya A. Shamskhou, Fergal R. Duffy, Lauren M. Cross,
-#            Vitaly V. Ganusov, Courtney R. Plumlee, Benjamin H. Gern,
-#            Alan H. Dierks, Sara B. Cohen, Kevin B. Urdahl*,
-#            Michael Y. Gerner*
+#            Courtney R. Plumlee, Benjamin H. Gern, Alan H. Dierks,
+#             Sara B. Cohen, John D. Aitchison, Vitaly V. Ganusov, 
+#            Kevin B. Urdahl*, Michael Y. Gerner*
 **Note:** Portions of this code and documentation were developed with assistance from ChatGPT (OpenAI).
 
 # -------------------------------------------------------------
