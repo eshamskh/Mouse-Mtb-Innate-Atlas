@@ -2,6 +2,7 @@
 *per_comparison/
 *Git Ignore Files/
 *app1.R
+*Push_to_GitHub
 # -- Include --
 !*GSEA_plots/
 !*merged_DEG_results/

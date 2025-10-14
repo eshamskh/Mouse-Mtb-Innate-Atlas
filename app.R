@@ -31,10 +31,10 @@ ui <- fluidPage(
                  "and Urdahl (Seattle Childrens' Research Institute, CGIDR) Laboratories.<br><br>",
                  "For use in submissions and publications, as well as further information regarding methods and analysis, please reference:<br>",
                  "<em>\"Monocytic Niches Enable Mycobacterium tuberculosis Persistence in Lymph Nodes\"</em><br>",
-                 "(Manuscript in Progress)<br>",
-                 "Elya A. Shamskhou, Fergal R. Duffy, Lauren M. Cross, Vitaly V. Ganusov, ",
-                 "Courtney R. Plumlee, Benjamin H. Gern, Alan H. Dierks, Sara B. Cohen, ",
-                 "Kevin B. Urdahl*, Michael Y. Gerner*"
+                 "(Manuscript under review)<br>",
+                 "Elya A. Shamskhou, Fergal J. Duffy, Lauren M. Cross, Courtney R. Plumlee, ",
+                 "Benjamin H. Gern, Alan H. Dierks, Sara B. Cohen, John D. Aitchison, ",
+                 " Vitaly V. Ganusov, Kevin B. Urdahl*, Michael Y. Gerner*"
                )),
   # --- Tab styling (lavender background + bold active tab) ---
   # --- Tab + Acknowledgements styling ---
