@@ -33,7 +33,7 @@ ui <- fluidPage(
                  "<em>\"Monocytic Niches Escape T cell Surveillance and Promote Mycobacterium tuberculosis Persistence in Lymph Nodes\"</em><br>",
                  "Elya A. Shamskhou, Fergal J. Duffy, Lauren M. Cross, Courtney R. Plumlee, Benjamin H. Gern, ",
                  "Holly W. Barrett, Alan H. Dierks, Sara B. Cohen, Ramya Sivakumar, John D. Aitchison, ",
-                 " Vitaly V. Ganusov, Kevin B. Urdahl*, Michael Y. Gerner*",
+                 " Vitaly V. Ganusov, Kevin B. Urdahl*, Michael Y. Gerner*<br>",
                  "<a href='https://doi.org/10.1016/j.immuni.2026.05.017' target='_blank'>https://doi.org/10.1016/j.immuni.2026.05.017</a>"
                )),
   # --- Tab styling (lavender background + bold active tab) ---
